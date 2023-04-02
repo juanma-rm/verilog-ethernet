@@ -34,6 +34,15 @@ THE SOFTWARE.
  */
 module fpga #
 (
+    // RAM configuration
+    parameter DDR_CH = 1,
+    parameter DDR_ENABLE = 0,
+    parameter AXI_DDR_DATA_WIDTH = 128,
+    parameter AXI_DDR_ADDR_WIDTH = 29,
+    parameter AXI_DDR_ID_WIDTH = 8,
+    parameter AXI_DDR_MAX_BURST_LEN = 256,
+    parameter AXI_DDR_NARROW_BURST = 0,
+
     // AXI interface configuration (DMA)
     parameter AXI_DATA_WIDTH = 128,
     parameter AXI_ADDR_WIDTH = 32,
@@ -74,8 +83,30 @@ module fpga #
     output wire       sfp0_tx_n,
     input  wire       sfp_mgt_refclk_0_p,
     input  wire       sfp_mgt_refclk_0_n,
-    output wire       sfp0_tx_disable_b
+    output wire       sfp0_tx_disable_b,
+
+    /*
+     * DDR4
+     */
+    output wire [16:0]  ddr4_adr,
+    output wire [1:0]   ddr4_ba,
+    output wire [0:0]   ddr4_bg,
+    output wire [0:0]   ddr4_ck_t,
+    output wire [0:0]   ddr4_ck_c,
+    output wire [0:0]   ddr4_cke,
+    output wire [0:0]   ddr4_cs_n,
+    output wire         ddr4_act_n,
+    output wire [0:0]   ddr4_odt,
+    output wire         ddr4_par,
+    output wire         ddr4_reset_n,
+    inout  wire [15:0]  ddr4_dq,
+    inout  wire [1:0]   ddr4_dqs_t,
+    inout  wire [1:0]   ddr4_dqs_c,
+    inout  wire [1:0]   ddr4_dm_dbi_n    
 );
+
+// RAM configuration
+parameter AXI_DDR_STRB_WIDTH = (AXI_DDR_DATA_WIDTH/8);
 
 // Clock and reset
 wire clk_25mhz_bufg;
@@ -469,6 +500,165 @@ sfp0_phy_inst (
     .phy_rx_prbs31_enable()
 );
 
+
+// DDR4
+wire [DDR_CH-1:0]                     ddr_clk;
+wire [DDR_CH-1:0]                     ddr_rst;
+
+wire [DDR_CH*AXI_DDR_ID_WIDTH-1:0]    m_axi_ddr_awid;
+wire [DDR_CH*AXI_DDR_ADDR_WIDTH-1:0]  m_axi_ddr_awaddr;
+wire [DDR_CH*8-1:0]                   m_axi_ddr_awlen;
+wire [DDR_CH*3-1:0]                   m_axi_ddr_awsize;
+wire [DDR_CH*2-1:0]                   m_axi_ddr_awburst;
+wire [DDR_CH-1:0]                     m_axi_ddr_awlock;
+wire [DDR_CH*4-1:0]                   m_axi_ddr_awcache;
+wire [DDR_CH*3-1:0]                   m_axi_ddr_awprot;
+wire [DDR_CH*4-1:0]                   m_axi_ddr_awqos;
+wire [DDR_CH-1:0]                     m_axi_ddr_awvalid;
+wire [DDR_CH-1:0]                     m_axi_ddr_awready;
+wire [DDR_CH*AXI_DDR_DATA_WIDTH-1:0]  m_axi_ddr_wdata;
+wire [DDR_CH*AXI_DDR_STRB_WIDTH-1:0]  m_axi_ddr_wstrb;
+wire [DDR_CH-1:0]                     m_axi_ddr_wlast;
+wire [DDR_CH-1:0]                     m_axi_ddr_wvalid;
+wire [DDR_CH-1:0]                     m_axi_ddr_wready;
+wire [DDR_CH*AXI_DDR_ID_WIDTH-1:0]    m_axi_ddr_bid;
+wire [DDR_CH*2-1:0]                   m_axi_ddr_bresp;
+wire [DDR_CH-1:0]                     m_axi_ddr_bvalid;
+wire [DDR_CH-1:0]                     m_axi_ddr_bready;
+wire [DDR_CH*AXI_DDR_ID_WIDTH-1:0]    m_axi_ddr_arid;
+wire [DDR_CH*AXI_DDR_ADDR_WIDTH-1:0]  m_axi_ddr_araddr;
+wire [DDR_CH*8-1:0]                   m_axi_ddr_arlen;
+wire [DDR_CH*3-1:0]                   m_axi_ddr_arsize;
+wire [DDR_CH*2-1:0]                   m_axi_ddr_arburst;
+wire [DDR_CH-1:0]                     m_axi_ddr_arlock;
+wire [DDR_CH*4-1:0]                   m_axi_ddr_arcache;
+wire [DDR_CH*3-1:0]                   m_axi_ddr_arprot;
+wire [DDR_CH*4-1:0]                   m_axi_ddr_arqos;
+wire [DDR_CH-1:0]                     m_axi_ddr_arvalid;
+wire [DDR_CH-1:0]                     m_axi_ddr_arready;
+wire [DDR_CH*AXI_DDR_ID_WIDTH-1:0]    m_axi_ddr_rid;
+wire [DDR_CH*AXI_DDR_DATA_WIDTH-1:0]  m_axi_ddr_rdata;
+wire [DDR_CH*2-1:0]                   m_axi_ddr_rresp;
+wire [DDR_CH-1:0]                     m_axi_ddr_rlast;
+wire [DDR_CH-1:0]                     m_axi_ddr_rvalid;
+wire [DDR_CH-1:0]                     m_axi_ddr_rready;
+
+wire [DDR_CH-1:0]                     ddr_status;
+
+generate
+
+if (DDR_ENABLE && DDR_CH > 0) begin
+
+ddr4_0 ddr4_inst (
+    .c0_sys_clk_p(clk_user_si570_p),
+    .c0_sys_clk_n(clk_user_si570_n),
+    .sys_rst(zynq_pl_reset),
+
+    .c0_init_calib_complete(ddr_status[0 +: 1]),
+    .dbg_clk(),
+    .dbg_bus(),
+
+    .c0_ddr4_adr(ddr4_adr),
+    .c0_ddr4_ba(ddr4_ba),
+    .c0_ddr4_cke(ddr4_cke),
+    .c0_ddr4_cs_n(ddr4_cs_n),
+    .c0_ddr4_dq(ddr4_dq),
+    .c0_ddr4_dqs_t(ddr4_dqs_t),
+    .c0_ddr4_dqs_c(ddr4_dqs_c),
+    .c0_ddr4_dm_dbi_n(ddr4_dm_dbi_n),
+    .c0_ddr4_odt(ddr4_odt),
+    .c0_ddr4_bg(ddr4_bg),
+    .c0_ddr4_reset_n(ddr4_reset_n),
+    .c0_ddr4_act_n(ddr4_act_n),
+    .c0_ddr4_ck_t(ddr4_ck_t),
+    .c0_ddr4_ck_c(ddr4_ck_c),
+
+    .c0_ddr4_ui_clk(ddr_clk[0 +: 1]),
+    .c0_ddr4_ui_clk_sync_rst(ddr_rst[0 +: 1]),
+
+    .c0_ddr4_aresetn(!ddr_rst[0 +: 1]),
+
+    .c0_ddr4_s_axi_awid(m_axi_ddr_awid[0*AXI_DDR_ID_WIDTH +: AXI_DDR_ID_WIDTH]),
+    .c0_ddr4_s_axi_awaddr(m_axi_ddr_awaddr[0*AXI_DDR_ADDR_WIDTH +: AXI_DDR_ADDR_WIDTH]),
+    .c0_ddr4_s_axi_awlen(m_axi_ddr_awlen[0*8 +: 8]),
+    .c0_ddr4_s_axi_awsize(m_axi_ddr_awsize[0*3 +: 3]),
+    .c0_ddr4_s_axi_awburst(m_axi_ddr_awburst[0*2 +: 2]),
+    .c0_ddr4_s_axi_awlock(m_axi_ddr_awlock[0 +: 1]),
+    .c0_ddr4_s_axi_awcache(m_axi_ddr_awcache[0*4 +: 4]),
+    .c0_ddr4_s_axi_awprot(m_axi_ddr_awprot[0*3 +: 3]),
+    .c0_ddr4_s_axi_awqos(m_axi_ddr_awqos[0*4 +: 4]),
+    .c0_ddr4_s_axi_awvalid(m_axi_ddr_awvalid[0 +: 1]),
+    .c0_ddr4_s_axi_awready(m_axi_ddr_awready[0 +: 1]),
+    .c0_ddr4_s_axi_wdata(m_axi_ddr_wdata[0*AXI_DDR_DATA_WIDTH +: AXI_DDR_DATA_WIDTH]),
+    .c0_ddr4_s_axi_wstrb(m_axi_ddr_wstrb[0*AXI_DDR_STRB_WIDTH +: AXI_DDR_STRB_WIDTH]),
+    .c0_ddr4_s_axi_wlast(m_axi_ddr_wlast[0 +: 1]),
+    .c0_ddr4_s_axi_wvalid(m_axi_ddr_wvalid[0 +: 1]),
+    .c0_ddr4_s_axi_wready(m_axi_ddr_wready[0 +: 1]),
+    .c0_ddr4_s_axi_bready(m_axi_ddr_bready[0 +: 1]),
+    .c0_ddr4_s_axi_bid(m_axi_ddr_bid[0*AXI_DDR_ID_WIDTH +: AXI_DDR_ID_WIDTH]),
+    .c0_ddr4_s_axi_bresp(m_axi_ddr_bresp[0*2 +: 2]),
+    .c0_ddr4_s_axi_bvalid(m_axi_ddr_bvalid[0 +: 1]),
+    .c0_ddr4_s_axi_arid(m_axi_ddr_arid[0*AXI_DDR_ID_WIDTH +: AXI_DDR_ID_WIDTH]),
+    .c0_ddr4_s_axi_araddr(m_axi_ddr_araddr[0*AXI_DDR_ADDR_WIDTH +: AXI_DDR_ADDR_WIDTH]),
+    .c0_ddr4_s_axi_arlen(m_axi_ddr_arlen[0*8 +: 8]),
+    .c0_ddr4_s_axi_arsize(m_axi_ddr_arsize[0*3 +: 3]),
+    .c0_ddr4_s_axi_arburst(m_axi_ddr_arburst[0*2 +: 2]),
+    .c0_ddr4_s_axi_arlock(m_axi_ddr_arlock[0 +: 1]),
+    .c0_ddr4_s_axi_arcache(m_axi_ddr_arcache[0*4 +: 4]),
+    .c0_ddr4_s_axi_arprot(m_axi_ddr_arprot[0*3 +: 3]),
+    .c0_ddr4_s_axi_arqos(m_axi_ddr_arqos[0*4 +: 4]),
+    .c0_ddr4_s_axi_arvalid(m_axi_ddr_arvalid[0 +: 1]),
+    .c0_ddr4_s_axi_arready(m_axi_ddr_arready[0 +: 1]),
+    .c0_ddr4_s_axi_rready(m_axi_ddr_rready[0 +: 1]),
+    .c0_ddr4_s_axi_rlast(m_axi_ddr_rlast[0 +: 1]),
+    .c0_ddr4_s_axi_rvalid(m_axi_ddr_rvalid[0 +: 1]),
+    .c0_ddr4_s_axi_rresp(m_axi_ddr_rresp[0*2 +: 2]),
+    .c0_ddr4_s_axi_rid(m_axi_ddr_rid[0*AXI_DDR_ID_WIDTH +: AXI_DDR_ID_WIDTH]),
+    .c0_ddr4_s_axi_rdata(m_axi_ddr_rdata[0*AXI_DDR_DATA_WIDTH +: AXI_DDR_DATA_WIDTH])
+);
+
+end else begin
+
+assign ddr4_adr = {17{1'bz}};
+assign ddr4_ba = {2{1'bz}};
+assign ddr4_bg = {1{1'bz}};
+assign ddr4_cke = 1'bz;
+assign ddr4_cs_n = 1'bz;
+assign ddr4_act_n = 1'bz;
+assign ddr4_odt = 1'bz;
+assign ddr4_par = 1'bz;
+assign ddr4_reset_n = 1'b0;
+assign ddr4_dq = {16{1'bz}};
+assign ddr4_dqs_t = {2{1'bz}};
+assign ddr4_dqs_c = {2{1'bz}};
+
+OBUFTDS ddr4_ck_obuftds_inst (
+    .I(1'b0),
+    .T(1'b1),
+    .O(ddr4_ck_t),
+    .OB(ddr4_ck_c)
+);
+
+assign ddr_clk = 0;
+assign ddr_rst = 0;
+
+assign m_axi_ddr_awready = 0;
+assign m_axi_ddr_wready = 0;
+assign m_axi_ddr_bid = 0;
+assign m_axi_ddr_bresp = 0;
+assign m_axi_ddr_bvalid = 0;
+assign m_axi_ddr_arready = 0;
+assign m_axi_ddr_rid = 0;
+assign m_axi_ddr_rdata = 0;
+assign m_axi_ddr_rresp = 0;
+assign m_axi_ddr_rlast = 0;
+assign m_axi_ddr_rvalid = 0;
+
+assign ddr_status = 0;
+
+end
+
+endgenerate
 
 fpga_core
 core_inst (

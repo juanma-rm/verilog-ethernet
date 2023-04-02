@@ -60,6 +60,9 @@ IP_TCL_FILES += ip/eth_xcvr_gt.tcl
 IP_TCL_FILES += ip/zynq_ps.tcl
 IP_TCL_FILES += ip/ddr4_0.tcl
 
+# # Configuration
+# CONFIG_TCL_FILES = ./config.tcl
+
 include ../common/vivado.mk
 
 program: $(FPGA_TOP).bit
